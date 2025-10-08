@@ -1,8 +1,10 @@
 import os
 import requests
+import base64
 from typing import Dict, List
 from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
 class JiraXrayAnalyzer:
@@ -10,10 +12,15 @@ class JiraXrayAnalyzer:
         self.jira_url = os.getenv('JIRA_URL')
         self.email = os.getenv('JIRA_EMAIL')
         self.api_token = os.getenv('JIRA_API_TOKEN')
-        self.auth = (self.email, self.api_token)
+        
+        # Create Basic Auth header
+        credentials = f"{self.email}:{self.api_token}"
+        encoded_credentials = base64.b64encode(credentials.encode()).decode()
+        
         self.headers = {
             'Content-Type': 'application/json',
-            'Accept': 'application/json'
+            'Accept': 'application/json',
+            'Authorization': f'Basic {encoded_credentials}'
         }
         
         # Validate required environment variables
@@ -23,7 +30,30 @@ class JiraXrayAnalyzer:
     def make_request(self, endpoint: str, params: Dict = None) -> Dict:
         """Make API request to Jira"""
         url = f"{self.jira_url}/rest/api/3/{endpoint}"
-        response = requests.get(url, auth=self.auth, headers=self.headers, params=params)
+        print(f"Making request to: {url}")
+        
+        response = requests.get(url, headers=self.headers, params=params)
+        
+        if response.status_code == 401:
+            raise Exception("Authentication failed. Please check your JIRA_EMAIL and JIRA_API_TOKEN")
+        elif response.status_code == 404:
+            raise Exception("Resource not found. Please check the endpoint and parameters")
+        
+        response.raise_for_status()
+        return response.json()
+
+    def make_xray_request(self, endpoint: str, params: Dict = None) -> Dict:
+        """Make API request to Xray specific endpoints"""
+        url = f"{self.jira_url}/rest/raven/1.0/{endpoint}"
+        print(f"Making Xray request to: {url}")
+        
+        response = requests.get(url, headers=self.headers, params=params)
+        
+        if response.status_code == 401:
+            raise Exception("Authentication failed. Please check your JIRA_EMAIL and JIRA_API_TOKEN")
+        elif response.status_code == 404:
+            raise Exception("Xray resource not found. Please check the endpoint")
+        
         response.raise_for_status()
         return response.json()
 
@@ -69,10 +99,60 @@ class JiraXrayAnalyzer:
         
         print(f"Fetching test execution results for: {test_execution_key}")
         
+        # Method 1: Using Xray specific endpoint (more reliable for Xray data)
+        try:
+            print("Trying Xray specific API...")
+            xray_endpoint = f"api/testexec/{test_execution_key}/test"
+            tests_data = self.make_xray_request(xray_endpoint)
+            
+            return self._process_xray_test_results(tests_data, test_execution_key)
+            
+        except Exception as e:
+            print(f"Xray API failed, falling back to Jira search: {e}")
+            # Fallback to Jira search method
+            return self._get_test_execution_via_jql(test_execution_key)
+
+    def _process_xray_test_results(self, tests_data: List, test_execution_key: str) -> Dict:
+        """Process test results from Xray API response"""
+        total_tests = 0
+        passed_tests = 0
+        failed_tests = 0
+        failed_tests_with_bugs = []
+        
+        for test in tests_data:
+            total_tests += 1
+            status = test.get('status', '').upper()
+            
+            if status in ['PASS', 'PASSED']:
+                passed_tests += 1
+            elif status in ['FAIL', 'FAILED']:
+                failed_tests += 1
+                
+                # Get defects from Xray response
+                defects = test.get('defects', [])
+                bug_ids = [defect.get('key', '') for defect in defects if defect.get('key')]
+                
+                if bug_ids:
+                    failed_tests_with_bugs.append({
+                        'test_key': test.get('key', ''),
+                        'test_summary': test.get('summary', ''),
+                        'bug_ids': bug_ids
+                    })
+        
+        return {
+            'test_execution_key': test_execution_key,
+            'total_tests': total_tests,
+            'passed_tests': passed_tests,
+            'failed_tests': failed_tests,
+            'failed_tests_with_bugs': failed_tests_with_bugs
+        }
+
+    def _get_test_execution_via_jql(self, test_execution_key: str) -> Dict:
+        """Fallback method using JQL to get test execution results"""
         # Get tests from the test execution using JQL
         params = {
             'jql': f'issue in testExecutions("{test_execution_key}")',
-            'fields': 'key,status,summary,customfield_10030',  # customfield_10030 is typically defects in Xray
+            'fields': 'key,status,summary,customfield_10030',
             'maxResults': 1000
         }
         
@@ -96,11 +176,12 @@ class JiraXrayAnalyzer:
                 defects = test['fields'].get('customfield_10030', [])
                 bug_ids = [defect['key'] for defect in defects]
                 
-                failed_tests_with_bugs.append({
-                    'test_key': test['key'],
-                    'test_summary': test['fields']['summary'],
-                    'bug_ids': bug_ids
-                })
+                if bug_ids:
+                    failed_tests_with_bugs.append({
+                        'test_key': test['key'],
+                        'test_summary': test['fields']['summary'],
+                        'bug_ids': bug_ids
+                    })
         
         return {
             'test_execution_key': test_execution_key,
@@ -120,6 +201,54 @@ class JiraXrayAnalyzer:
         
         print(f"Fetching test plan results for: {test_plan_key}")
         
+        # Get test executions linked to the test plan using Xray API
+        try:
+            xray_endpoint = f"api/testplan/{test_plan_key}/testexecution"
+            executions_data = self.make_xray_request(xray_endpoint)
+            
+            all_results = []
+            total_aggregated = {
+                'total_tests': 0,
+                'passed_tests': 0,
+                'failed_tests': 0,
+                'failed_tests_with_bugs': []
+            }
+            
+            for execution in executions_data:
+                execution_key = execution.get('key')
+                if execution_key:
+                    execution_results = self.get_test_execution_results_specific(execution_key)
+                    if execution_results:
+                        all_results.append(execution_results)
+                        
+                        # Aggregate results
+                        total_aggregated['total_tests'] += execution_results['total_tests']
+                        total_aggregated['passed_tests'] += execution_results['passed_tests']
+                        total_aggregated['failed_tests'] += execution_results['failed_tests']
+                        total_aggregated['failed_tests_with_bugs'].extend(execution_results['failed_tests_with_bugs'])
+            
+            return {
+                'test_plan_key': test_plan_key,
+                'execution_results': all_results,
+                'aggregated_results': total_aggregated
+            }
+            
+        except Exception as e:
+            print(f"Xray test plan API failed: {e}")
+            # Fallback to JQL method
+            return self._get_test_plan_via_jql(test_plan_key)
+
+    def get_test_execution_results_specific(self, test_execution_key: str) -> Dict:
+        """Get test execution results for a specific key (internal use)"""
+        try:
+            xray_endpoint = f"api/testexec/{test_execution_key}/test"
+            tests_data = self.make_xray_request(xray_endpoint)
+            return self._process_xray_test_results(tests_data, test_execution_key)
+        except:
+            return self._get_test_execution_via_jql(test_execution_key)
+
+    def _get_test_plan_via_jql(self, test_plan_key: str) -> Dict:
+        """Fallback method using JQL to get test plan results"""
         # Get test executions linked to the test plan
         params = {
             'jql': f'issue in testPlans("{test_plan_key}") and issuetype = "Test Execution"',
@@ -139,52 +268,16 @@ class JiraXrayAnalyzer:
         
         for execution in executions_data.get('issues', []):
             execution_key = execution['key']
+            execution_results = self.get_test_execution_results_specific(execution_key)
             
-            # Get results for each test execution
-            execution_params = {
-                'jql': f'issue in testExecutions("{execution_key}")',
-                'fields': 'key,status,customfield_10030',
-                'maxResults': 1000
-            }
-            
-            tests_data = self.make_request('search', execution_params)
-            
-            execution_total = 0
-            execution_passed = 0
-            execution_failed = 0
-            execution_failed_with_bugs = []
-            
-            for test in tests_data.get('issues', []):
-                execution_total += 1
-                status = test['fields']['status']['name'].upper()
+            if execution_results:
+                all_results.append(execution_results)
                 
-                if status in ['PASS', 'PASSED']:
-                    execution_passed += 1
-                elif status in ['FAIL', 'FAILED']:
-                    execution_failed += 1
-                    
-                    defects = test['fields'].get('customfield_10030', [])
-                    bug_ids = [defect['key'] for defect in defects]
-                    
-                    if bug_ids:
-                        execution_failed_with_bugs.append({
-                            'test_key': test['key'],
-                            'bug_ids': bug_ids
-                        })
-            
-            all_results.append({
-                'execution_key': execution_key,
-                'total_tests': execution_total,
-                'passed_tests': execution_passed,
-                'failed_tests': execution_failed,
-                'failed_tests_with_bugs': execution_failed_with_bugs
-            })
-            
-            # Aggregate results
-            total_aggregated['total_tests'] += execution_total
-            total_aggregated['passed_tests'] += execution_passed
-            total_aggregated['failed_tests'] += execution_failed
-            total_aggregated['failed_tests_with_bugs'].extend(execution_failed_with_bugs)
+                # Aggregate results
+                total_aggregated['total_tests'] += execution_results['total_tests']
+                total_aggregated['passed_tests'] += execution_results['passed_tests']
+                total_aggregated['failed_tests'] += execution_results['failed_tests']
+                total_aggregated['failed_tests_with_bugs'].extend(execution_results['failed_tests_with_bugs'])
         
         return {
             'test_plan_key': test_plan_key,
@@ -247,6 +340,8 @@ def main():
         
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
