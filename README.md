@@ -1,12 +1,3 @@
-.env
-JIRA_URL=https://your-domain.atlassian.net
-JIRA_EMAIL=your-email@company.com
-JIRA_API_TOKEN=your-api-token
-FIX_VERSION=release-2.5
-TEST_PLAN_KEY=TP-123
-TEST_EXECUTION_KEY=TEMP-456
-PROJECT_KEY=PROJ
-
 import os
 import requests
 from typing import Dict, List
