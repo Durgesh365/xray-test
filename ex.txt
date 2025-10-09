@@ -1,704 +1,317 @@
-import os
-import requests
-import json
-from datetime import datetime
-from typing import Dict, List, Optional
-from dotenv import load_dotenv
+Here are the specific fixes needed:
 
-# Load environment variables
-load_dotenv()
+## 1. Fix JQL Queries for Xray Server
 
-class JiraXrayAnalyzer:
-    def __init__(self):
-        self.jira_url = os.getenv('JIRA_URL')
-        self.api_token = os.getenv('JIRA_API_TOKEN')
-        
-        self.headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': f'Bearer {self.api_token}'
-        }
-        
-        # Validate required environment variables
-        if not all([self.jira_url, self.api_token]):
-            raise ValueError("Missing required environment variables: JIRA_URL, JIRA_API_TOKEN")
-
-    def make_request(self, endpoint: str, params: Dict = None) -> Dict:
-        """Make API request to Jira"""
-        url = f"{self.jira_url}/rest/api/2/{endpoint}"
-        response = requests.get(url, headers=self.headers, params=params)
-        response.raise_for_status()
-        return response.json()
-
-    def get_tickets_by_fix_version(self) -> List[Dict]:
-        """Get tickets based on fix version"""
-        fix_version = os.getenv('FIX_VERSION')
-        project_key = os.getenv('PROJECT_KEY')
-        
-        if not fix_version:
-            return []
-        
-        jql = f'fixVersion = "{fix_version}"'
-        if project_key:
-            jql = f'project = {project_key} AND {jql}'
-        
-        params = {
-            'jql': jql,
-            'fields': 'key,summary,issuetype,status,assignee,priority',
-            'maxResults': 1000
-        }
-        
-        data = self.make_request('search', params)
-        
-        tickets = []
-        for issue in data.get('issues', []):
-            tickets.append({
-                'key': issue['key'],
-                'summary': issue['fields']['summary'],
-                'type': issue['fields']['issuetype']['name'],
-                'status': issue['fields']['status']['name'],
-                'assignee': issue['fields']['assignee']['displayName'] if issue['fields']['assignee'] else 'Unassigned',
-                'priority': issue['fields']['priority']['name'] if issue['fields']['priority'] else 'None'
-            })
-        
-        return tickets
-
-    def get_test_execution_results(self) -> Dict:
-        """Get test execution results"""
-        test_execution_key = os.getenv('TEST_EXECUTION_KEY')
-        
-        if not test_execution_key:
-            return {}
-        
-        # Get test execution details
-        execution_details = self.make_request(f'issue/{test_execution_key}')
-        
-        # Get tests from the test execution
-        params = {
-            'jql': f'issue in testExecutions("{test_execution_key}")',
-            'fields': 'key,summary,status,priority,customfield_10030',  # defects field
-            'maxResults': 1000
-        }
-        
-        tests_data = self.make_request('search', params)
-        
-        total_tests = 0
-        passed_tests = 0
-        failed_tests = 0
-        blocked_tests = 0
-        not_executed_tests = 0
-        failed_tests_with_bugs = []
-        test_details = []
-        
-        for test in tests_data.get('issues', []):
-            total_tests += 1
-            status = test['fields']['status']['name'].upper()
-            
-            test_detail = {
-                'key': test['key'],
-                'summary': test['fields']['summary'],
-                'status': status,
-                'priority': test['fields']['priority']['name'] if test['fields']['priority'] else 'None'
-            }
-            
-            if status in ['PASS', 'PASSED']:
-                passed_tests += 1
-            elif status in ['FAIL', 'FAILED']:
-                failed_tests += 1
-                
-                # Get defects (bugs) associated with this test failure
-                defects = test['fields'].get('customfield_10030', [])
-                bug_ids = [defect['key'] for defect in defects]
-                
-                if bug_ids:
-                    failed_tests_with_bugs.append({
-                        'test_key': test['key'],
-                        'test_summary': test['fields']['summary'],
-                        'bug_ids': bug_ids
-                    })
-                    test_detail['defects'] = bug_ids
-            elif status in ['BLOCKED']:
-                blocked_tests += 1
-            else:
-                not_executed_tests += 1
-            
-            test_details.append(test_detail)
-        
-        return {
-            'test_execution_key': test_execution_key,
-            'test_execution_summary': execution_details['fields']['summary'],
-            'total_tests': total_tests,
-            'passed_tests': passed_tests,
-            'failed_tests': failed_tests,
-            'blocked_tests': blocked_tests,
-            'not_executed_tests': not_executed_tests,
-            'success_rate': round((passed_tests / total_tests) * 100, 2) if total_tests > 0 else 0,
-            'failed_tests_with_bugs': failed_tests_with_bugs,
-            'test_details': test_details
-        }
-
-    def get_test_plan_results(self) -> Dict:
-        """Get results for test plan"""
-        test_plan_key = os.getenv('TEST_PLAN_KEY')
-        
-        if not test_plan_key:
-            return {}
-        
-        # Get test plan details
-        plan_details = self.make_request(f'issue/{test_plan_key}')
-        
-        # Get test executions linked to the test plan
-        params = {
-            'jql': f'issue in testPlans("{test_plan_key}") and issuetype = "Test Execution"',
-            'fields': 'key,summary,status',
-            'maxResults': 1000
-        }
-        
-        executions_data = self.make_request('search', params)
-        
-        all_results = []
-        total_aggregated = {
-            'total_tests': 0,
-            'passed_tests': 0,
-            'failed_tests': 0,
-            'blocked_tests': 0,
-            'not_executed_tests': 0,
-            'failed_tests_with_bugs': []
-        }
-        
-        for execution in executions_data.get('issues', []):
-            execution_key = execution['key']
-            execution_results = self.get_test_execution_results_specific(execution_key)
-            
-            if execution_results:
-                all_results.append(execution_results)
-                
-                # Aggregate results
-                total_aggregated['total_tests'] += execution_results['total_tests']
-                total_aggregated['passed_tests'] += execution_results['passed_tests']
-                total_aggregated['failed_tests'] += execution_results['failed_tests']
-                total_aggregated['blocked_tests'] += execution_results['blocked_tests']
-                total_aggregated['not_executed_tests'] += execution_results['not_executed_tests']
-                total_aggregated['failed_tests_with_bugs'].extend(execution_results['failed_tests_with_bugs'])
-        
-        total_executed = total_aggregated['passed_tests'] + total_aggregated['failed_tests'] + total_aggregated['blocked_tests']
-        success_rate = round((total_aggregated['passed_tests'] / total_executed) * 100, 2) if total_executed > 0 else 0
-        
-        return {
-            'test_plan_key': test_plan_key,
-            'test_plan_summary': plan_details['fields']['summary'],
-            'execution_results': all_results,
-            'aggregated_results': total_aggregated,
-            'success_rate': success_rate,
-            'total_executions': len(all_results)
-        }
-
-    def get_test_execution_results_specific(self, test_execution_key: str) -> Dict:
-        """Get test execution results for a specific key"""
-        try:
-            execution_details = self.make_request(f'issue/{test_execution_key}')
-            
-            params = {
-                'jql': f'issue in testExecutions("{test_execution_key}")',
-                'fields': 'key,summary,status,customfield_10030',
-                'maxResults': 1000
-            }
-            
-            tests_data = self.make_request('search', params)
-            
-            total_tests = 0
-            passed_tests = 0
-            failed_tests = 0
-            blocked_tests = 0
-            not_executed_tests = 0
-            failed_tests_with_bugs = []
-            
-            for test in tests_data.get('issues', []):
-                total_tests += 1
-                status = test['fields']['status']['name'].upper()
-                
-                if status in ['PASS', 'PASSED']:
-                    passed_tests += 1
-                elif status in ['FAIL', 'FAILED']:
-                    failed_tests += 1
-                    
-                    defects = test['fields'].get('customfield_10030', [])
-                    bug_ids = [defect['key'] for defect in defects]
-                    
-                    if bug_ids:
-                        failed_tests_with_bugs.append({
-                            'test_key': test['key'],
-                            'test_summary': test['fields']['summary'],
-                            'bug_ids': bug_ids
-                        })
-                elif status in ['BLOCKED']:
-                    blocked_tests += 1
-                else:
-                    not_executed_tests += 1
-            
-            return {
-                'test_execution_key': test_execution_key,
-                'test_execution_summary': execution_details['fields']['summary'],
-                'total_tests': total_tests,
-                'passed_tests': passed_tests,
-                'failed_tests': failed_tests,
-                'blocked_tests': blocked_tests,
-                'not_executed_tests': not_executed_tests,
-                'failed_tests_with_bugs': failed_tests_with_bugs
-            }
-        except Exception as e:
-            print(f"Error getting execution {test_execution_key}: {e}")
-            return None
-
-class HTMLReportGenerator:
-    def __init__(self, analyzer: JiraXrayAnalyzer):
-        self.analyzer = analyzer
-        self.report_data = {}
+```python
+def get_test_execution_results(self) -> Dict:
+    """Get test execution results from environment variable"""
+    test_execution_key = os.getenv('TEST_EXECUTION_KEY')
     
-    def generate_report(self):
-        """Generate complete report data"""
-        self.report_data = {
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'fix_version_tickets': [],
-            'test_execution_results': {},
-            'test_plan_results': {},
-            'environment': {
-                'fix_version': os.getenv('FIX_VERSION'),
-                'test_execution_key': os.getenv('TEST_EXECUTION_KEY'),
-                'test_plan_key': os.getenv('TEST_PLAN_KEY'),
-                'project_key': os.getenv('PROJECT_KEY')
-            }
-        }
-        
-        # Collect data
-        if os.getenv('FIX_VERSION'):
-            self.report_data['fix_version_tickets'] = self.analyzer.get_tickets_by_fix_version()
-        
-        if os.getenv('TEST_EXECUTION_KEY'):
-            self.report_data['test_execution_results'] = self.analyzer.get_test_execution_results()
-        
-        if os.getenv('TEST_PLAN_KEY'):
-            self.report_data['test_plan_results'] = self.analyzer.get_test_plan_results()
+    if not test_execution_key:
+        return {}
     
-    def save_html_report(self, filename: str = "release_report.html"):
-        """Save the report as HTML file"""
-        html_content = self._generate_html_content()
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        
-        print(f"HTML report saved as: {filename}")
-        return filename
+    # Get test execution details
+    execution_details = self.make_request(f'issue/{test_execution_key}')
     
-    def _generate_html_content(self) -> str:
-        """Generate HTML content"""
-        return f"""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Release Test Report</title>
-    <style>
-        * {{
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }}
-        body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background-color: #f5f5f5;
-            padding: 20px;
-        }}
-        .container {{
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }}
-        .header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }}
-        .header h1 {{
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }}
-        .header .subtitle {{
-            font-size: 1.2em;
-            opacity: 0.9;
-        }}
-        .summary-cards {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            padding: 20px;
-            background: #f8f9fa;
-        }}
-        .card {{
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            text-align: center;
-        }}
-        .card h3 {{
-            color: #666;
-            font-size: 0.9em;
-            text-transform: uppercase;
-            margin-bottom: 10px;
-        }}
-        .card .value {{
-            font-size: 2em;
-            font-weight: bold;
-            color: #333;
-        }}
-        .card.success {{ border-left: 4px solid #28a745; }}
-        .card.danger {{ border-left: 4px solid #dc3545; }}
-        .card.warning {{ border-left: 4px solid #ffc107; }}
-        .card.info {{ border-left: 4px solid #17a2b8; }}
-        .section {{
-            padding: 30px;
-            border-bottom: 1px solid #eee;
-        }}
-        .section:last-child {{
-            border-bottom: none;
-        }}
-        .section h2 {{
-            color: #444;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #667eea;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }}
-        th, td {{
-            padding: 12px 15px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }}
-        th {{
-            background-color: #f8f9fa;
-            font-weight: 600;
-        }}
-        tr:hover {{
-            background-color: #f5f5f5;
-        }}
-        .status-badge {{
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.8em;
-            font-weight: bold;
-        }}
-        .status-pass {{ background: #d4edda; color: #155724; }}
-        .status-fail {{ background: #f8d7da; color: #721c24; }}
-        .status-blocked {{ background: #fff3cd; color: #856404; }}
-        .progress-bar {{
-            width: 100%;
-            height: 20px;
-            background-color: #e9ecef;
-            border-radius: 10px;
-            overflow: hidden;
-            margin: 10px 0;
-        }}
-        .progress-fill {{
-            height: 100%;
-            background: linear-gradient(90deg, #28a745, #20c997);
-            transition: width 0.3s ease;
-        }}
-        .footer {{
-            text-align: center;
-            padding: 20px;
-            background: #f8f9fa;
-            color: #666;
-            font-size: 0.9em;
-        }}
-        .chart-container {{
-            margin: 20px 0;
-            padding: 20px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        {self._generate_header()}
-        {self._generate_summary_cards()}
-        {self._generate_tickets_section()}
-        {self._generate_test_execution_section()}
-        {self._generate_test_plan_section()}
-        {self._generate_footer()}
+    # FIXED: Correct JQL for Xray Server
+    params = {
+        'jql': f'issueFunction in testExecutionTests("{test_execution_key}")',
+        'fields': 'key,summary,status,priority',
+        'maxResults': 1000
+    }
+    
+    tests_data = self.make_request('search', params)
+    
+    # Rest of your existing logic for counting tests...
+```
+
+## 2. Fix Test Plan Query
+
+```python
+def get_test_plan_results(self) -> Dict:
+    """Get results for test plan from environment variable"""
+    test_plan_key = os.getenv('TEST_PLAN_KEY')
+    
+    if not test_plan_key:
+        return {}
+    
+    # Get test plan details
+    plan_details = self.make_request(f'issue/{test_plan_key}')
+    
+    # FIXED: Correct JQL for test executions in test plan
+    params = {
+        'jql': f'issueFunction in testPlanTests("{test_plan_key}")',
+        'fields': 'key,summary,status',
+        'maxResults': 1000
+    }
+    
+    tests_data = self.make_request('search', params)
+    
+    # Count tests directly from test plan
+    total_tests = len(tests_data.get('issues', []))
+    
+    # Count statuses
+    passed_tests = 0
+    failed_tests = 0
+    other_tests = 0
+    
+    for test in tests_data.get('issues', []):
+        status = test['fields']['status']['name'].upper()
+        if status in ['PASS', 'PASSED']:
+            passed_tests += 1
+        elif status in ['FAIL', 'FAILED']:
+            failed_tests += 1
+        else:
+            other_tests += 1
+    
+    success_rate = round((passed_tests / total_tests) * 100, 2) if total_tests > 0 else 0
+    
+    return {
+        'test_plan_key': test_plan_key,
+        'test_plan_summary': plan_details['fields']['summary'],
+        'total_tests': total_tests,
+        'passed_tests': passed_tests,
+        'failed_tests': failed_tests,
+        'other_tests': other_tests,
+        'success_rate': success_rate
+    }
+```
+
+## 3. Remove Test Cases Table
+
+In the HTML generation, remove the test details table from `_generate_test_execution_section()`:
+
+```python
+def _generate_test_execution_section(self) -> str:
+    if not self.report_data['test_execution_results']:
+        return ""
+    
+    exec_data = self.report_data['test_execution_results']
+    
+    return f"""
+    <div class="section">
+        <h2>Test Execution: {exec_data['test_execution_key']}</h2>
+        <p><strong>Summary:</strong> {exec_data['test_execution_summary']}</p>
+        
+        <table>
+            <tr><th>Total Tests</th><td>{exec_data['total_tests']}</td></tr>
+            <tr><th>Passed Tests</th><td>{exec_data['passed_tests']}</td></tr>
+            <tr><th>Failed Tests</th><td>{exec_data['failed_tests']}</td></tr>
+            <tr><th>Success Rate</th><td><strong>{exec_data['success_rate']}%</strong></td></tr>
+        </table>
     </div>
-</body>
-</html>
-        """
+    """
+```
+
+## 4. Fix Summary Cards Logic
+
+Update `_generate_summary_cards()` to use correct data:
+
+```python
+def _generate_summary_cards(self) -> str:
+    cards = []
     
-    def _generate_header(self) -> str:
-        fix_version = os.getenv('FIX_VERSION', 'N/A')
-        return f"""
-        <div class="header">
-            <h1>🚀 Release Test Report</h1>
-            <div class="subtitle">
-                Fix Version: {fix_version} | Generated on: {self.report_data['timestamp']}
-            </div>
+    # Tickets card
+    if self.report_data['fix_version_tickets']:
+        cards.append(f"""
+        <div class="card info">
+            <h3>Total Tickets</h3>
+            <div class="value">{len(self.report_data['fix_version_tickets'])}</div>
         </div>
-        """
+        """)
     
-    def _generate_summary_cards(self) -> str:
-        cards = []
-        
-        # Tickets card
-        if self.report_data['fix_version_tickets']:
-            cards.append(f"""
-            <div class="card info">
-                <h3>Total Tickets</h3>
-                <div class="value">{len(self.report_data['fix_version_tickets'])}</div>
-            </div>
-            """)
-        
-        # Test Execution cards
-        if self.report_data['test_execution_results']:
-            exec_data = self.report_data['test_execution_results']
-            cards.extend([
-                f"""
-                <div class="card success">
-                    <h3>Tests Passed</h3>
-                    <div class="value">{exec_data['passed_tests']}</div>
-                </div>
-                """,
-                f"""
-                <div class="card danger">
-                    <h3>Tests Failed</h3>
-                    <div class="value">{exec_data['failed_tests']}</div>
-                </div>
-                """,
-                f"""
-                <div class="card info">
-                    <h3>Success Rate</h3>
-                    <div class="value">{exec_data['success_rate']}%</div>
-                </div>
-                """
-            ])
-        
-        # Test Plan cards
-        if self.report_data['test_plan_results']:
-            plan_data = self.report_data['test_plan_results']
-            cards.extend([
-                f"""
-                <div class="card warning">
-                    <h3>Test Executions</h3>
-                    <div class="value">{plan_data['total_executions']}</div>
-                </div>
-                """,
-                f"""
-                <div class="card info">
-                    <h3>Overall Success Rate</h3>
-                    <div class="value">{plan_data['success_rate']}%</div>
-                </div>
-                """
-            ])
-        
-        return f'<div class="summary-cards">{"".join(cards)}</div>'
-    
-    def _generate_tickets_section(self) -> str:
-        if not self.report_data['fix_version_tickets']:
-            return ""
-        
-        tickets_html = "".join([
-            f"""
-            <tr>
-                <td><a href="{self.analyzer.jira_url}/browse/{ticket['key']}" target="_blank">{ticket['key']}</a></td>
-                <td>{ticket['summary']}</td>
-                <td>{ticket['type']}</td>
-                <td>{ticket['status']}</td>
-                <td>{ticket['priority']}</td>
-                <td>{ticket['assignee']}</td>
-            </tr>
-            """ for ticket in self.report_data['fix_version_tickets']
-        ])
-        
-        return f"""
-        <div class="section">
-            <h2>📋 Tickets in Fix Version</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Key</th>
-                        <th>Summary</th>
-                        <th>Type</th>
-                        <th>Status</th>
-                        <th>Priority</th>
-                        <th>Assignee</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {tickets_html}
-                </tbody>
-            </table>
-        </div>
-        """
-    
-    def _generate_test_execution_section(self) -> str:
-        if not self.report_data['test_execution_results']:
-            return ""
-        
+    # Test Execution cards - FIXED: Check if data exists and has values
+    if self.report_data['test_execution_results'] and self.report_data['test_execution_results'].get('total_tests', 0) > 0:
         exec_data = self.report_data['test_execution_results']
-        
-        # Progress bar
-        total = exec_data['total_tests']
-        passed_pct = (exec_data['passed_tests'] / total) * 100 if total > 0 else 0
-        failed_pct = (exec_data['failed_tests'] / total) * 100 if total > 0 else 0
-        blocked_pct = (exec_data['blocked_tests'] / total) * 100 if total > 0 else 0
-        
-        # Test details table
-        test_details_html = "".join([
+        cards.extend([
             f"""
-            <tr>
-                <td><a href="{self.analyzer.jira_url}/browse/{test['key']}" target="_blank">{test['key']}</a></td>
-                <td>{test['summary']}</td>
-                <td><span class="status-badge status-{test['status'].lower()}">{test['status']}</span></td>
-                <td>{test['priority']}</td>
-                <td>{', '.join(test.get('defects', []))}</td>
-            </tr>
-            """ for test in exec_data.get('test_details', [])
-        ])
-        
-        return f"""
-        <div class="section">
-            <h2>🧪 Test Execution: {exec_data['test_execution_key']}</h2>
-            <p><strong>Summary:</strong> {exec_data['test_execution_summary']}</p>
-            
-            <div class="chart-container">
-                <h3>Test Results Overview</h3>
-                <div class="progress-bar">
-                    <div class="progress-fill" style="width: {passed_pct}%"></div>
-                </div>
-                <div style="display: flex; justify-content: space-between; font-size: 0.9em;">
-                    <span>Passed: {exec_data['passed_tests']} ({passed_pct:.1f}%)</span>
-                    <span>Failed: {exec_data['failed_tests']} ({failed_pct:.1f}%)</span>
-                    <span>Blocked: {exec_data['blocked_tests']} ({blocked_pct:.1f}%)</span>
-                    <span>Not Executed: {exec_data['not_executed_tests']}</span>
-                </div>
+            <div class="card success">
+                <h3>Tests Passed</h3>
+                <div class="value">{exec_data['passed_tests']}</div>
             </div>
-            
-            <h3>Test Details</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Test Key</th>
-                        <th>Summary</th>
-                        <th>Status</th>
-                        <th>Priority</th>
-                        <th>Defects</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {test_details_html}
-                </tbody>
-            </table>
-        </div>
-        """
+            """,
+            f"""
+            <div class="card danger">
+                <h3>Tests Failed</h3>
+                <div class="value">{exec_data['failed_tests']}</div>
+            </div>
+            """,
+            f"""
+            <div class="card info">
+                <h3>Success Rate</h3>
+                <div class="value">{exec_data['success_rate']}%</div>
+            </div>
+            """
+        ])
     
-    def _generate_test_plan_section(self) -> str:
-        if not self.report_data['test_plan_results']:
-            return ""
-        
+    # Test Plan cards - FIXED: Check if data exists and has values
+    if self.report_data['test_plan_results'] and self.report_data['test_plan_results'].get('total_tests', 0) > 0:
         plan_data = self.report_data['test_plan_results']
-        agg = plan_data['aggregated_results']
-        
-        return f"""
-        <div class="section">
-            <h2>📊 Test Plan: {plan_data['test_plan_key']}</h2>
-            <p><strong>Summary:</strong> {plan_data['test_plan_summary']}</p>
-            
-            <h3>Aggregated Results</h3>
-            <table>
-                <tr><th>Total Test Executions</th><td>{plan_data['total_executions']}</td></tr>
-                <tr><th>Total Tests</th><td>{agg['total_tests']}</td></tr>
-                <tr><th>Passed Tests</th><td>{agg['passed_tests']}</td></tr>
-                <tr><th>Failed Tests</th><td>{agg['failed_tests']}</td></tr>
-                <tr><th>Blocked Tests</th><td>{agg['blocked_tests']}</td></tr>
-                <tr><th>Overall Success Rate</th><td><strong>{plan_data['success_rate']}%</strong></td></tr>
-            </table>
-            
-            <h3>Individual Test Executions</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Execution Key</th>
-                        <th>Summary</th>
-                        <th>Total Tests</th>
-                        <th>Passed</th>
-                        <th>Failed</th>
-                        <th>Success Rate</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {"".join([f"""
-                    <tr>
-                        <td><a href="{self.analyzer.jira_url}/browse/{exec['test_execution_key']}" target="_blank">{exec['test_execution_key']}</a></td>
-                        <td>{exec['test_execution_summary']}</td>
-                        <td>{exec['total_tests']}</td>
-                        <td>{exec['passed_tests']}</td>
-                        <td>{exec['failed_tests']}</td>
-                        <td>{round((exec['passed_tests'] / exec['total_tests']) * 100, 2) if exec['total_tests'] > 0 else 0}%</td>
-                    </tr>
-                    """ for exec in plan_data['execution_results'] if exec])}
-                </tbody>
-            </table>
-        </div>
-        """
+        cards.extend([
+            f"""
+            <div class="card warning">
+                <h3>Plan Tests</h3>
+                <div class="value">{plan_data['total_tests']}</div>
+            </div>
+            """,
+            f"""
+            <div class="card info">
+                <h3>Plan Success</h3>
+                <div class="value">{plan_data['success_rate']}%</div>
+            </div>
+            """
+        ])
     
-    def _generate_footer(self) -> str:
-        return f"""
-        <div class="footer">
-            <p>Report generated on {self.report_data['timestamp']}</p>
-            <p>Jira URL: {self.analyzer.jira_url}</p>
-        </div>
-        """
+    return f'<div class="summary-cards">{"".join(cards)}</div>'
+```
 
-def main():
-    try:
-        analyzer = JiraXrayAnalyzer()
-        report_generator = HTMLReportGenerator(analyzer)
-        
-        print("Generating release report...")
-        report_generator.generate_report()
-        
-        filename = report_generator.save_html_report()
-        print(f"✅ Report generated successfully: {filename}")
-        
-        # Also print summary to console
-        print("\n" + "="*60)
-        print("QUICK SUMMARY:")
-        print("="*60)
-        
-        if report_generator.report_data['fix_version_tickets']:
-            print(f"📋 Tickets: {len(report_generator.report_data['fix_version_tickets'])}")
-        
-        if report_generator.report_data['test_execution_results']:
-            exec_data = report_generator.report_data['test_execution_results']
-            print(f"🧪 Test Execution: {exec_data['success_rate']}% success rate")
-        
-        if report_generator.report_data['test_plan_results']:
-            plan_data = report_generator.report_data['test_plan_results']
-            print(f"📊 Test Plan: {plan_data['success_rate']}% overall success rate")
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
+## 5. Professional Stakeholder CSS
 
-if __name__ == "__main__":
-    main()
+Replace the CSS with this formal, letter-style design:
+
+```css
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+    
+    body {
+        font-family: 'Inter', sans-serif;
+        line-height: 1.6;
+        color: #2D3748;
+        background: #ffffff;
+        padding: 40px 20px;
+        font-size: 14px;
+    }
+    
+    .report-container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        border: 1px solid #E2E8F0;
+    }
+    
+    .letter-head {
+        background: #1E40AF;
+        color: white;
+        padding: 40px;
+        text-align: center;
+        border-bottom: 4px solid #1E3A8A;
+    }
+    
+    .letter-head h1 {
+        font-size: 28px;
+        font-weight: 600;
+        margin-bottom: 8px;
+    }
+    
+    .letter-head .subtitle {
+        font-size: 16px;
+        opacity: 0.9;
+        font-weight: 400;
+    }
+    
+    .content-section {
+        padding: 32px 40px;
+        border-bottom: 1px solid #E2E8F0;
+    }
+    
+    .content-section:last-child {
+        border-bottom: none;
+    }
+    
+    .section-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #1E40AF;
+        margin-bottom: 20px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid #E2E8F0;
+    }
+    
+    .metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    
+    .metric-card {
+        background: #F8FAFC;
+        padding: 20px;
+        border-radius: 6px;
+        border-left: 4px solid #1E40AF;
+        text-align: center;
+    }
+    
+    .metric-card.success { border-left-color: #059669; }
+    .metric-card.warning { border-left-color: #D97706; }
+    .metric-card.danger { border-left-color: #DC2626; }
+    
+    .metric-value {
+        font-size: 24px;
+        font-weight: 700;
+        color: #1F2937;
+        margin-bottom: 4px;
+    }
+    
+    .metric-label {
+        font-size: 12px;
+        color: #6B7280;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 16px;
+        font-size: 13px;
+    }
+    
+    .data-table th {
+        background: #F8FAFC;
+        padding: 12px 16px;
+        text-align: left;
+        font-weight: 600;
+        color: #374151;
+        border-bottom: 1px solid #E5E7EB;
+    }
+    
+    .data-table td {
+        padding: 12px 16px;
+        border-bottom: 1px solid #F3F4F6;
+    }
+    
+    .data-table tr:last-child td {
+        border-bottom: none;
+    }
+    
+    .status-badge {
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+    
+    .status-pass { background: #D1FAE5; color: #065F46; }
+    .status-fail { background: #FEE2E2; color: #991B1B; }
+    
+    .footer {
+        padding: 24px 40px;
+        background: #F8FAFC;
+        text-align: center;
+        color: #6B7280;
+        font-size: 12px;
+        border-top: 1px solid #E2E8F0;
+    }
+</style>
+```
+
+These fixes should resolve the 400 errors, correct the counts, remove test cases, and provide a professional stakeholder-friendly format.
