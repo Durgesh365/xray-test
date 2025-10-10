@@ -1,317 +1,39 @@
-Here are the specific fixes needed:
-
-## 1. Fix JQL Queries for Xray Server
-
-```python
-def get_test_execution_results(self) -> Dict:
-    """Get test execution results from environment variable"""
-    test_execution_key = os.getenv('TEST_EXECUTION_KEY')
-    
-    if not test_execution_key:
-        return {}
-    
-    # Get test execution details
-    execution_details = self.make_request(f'issue/{test_execution_key}')
-    
-    # FIXED: Correct JQL for Xray Server
-    params = {
-        'jql': f'issueFunction in testExecutionTests("{test_execution_key}")',
-        'fields': 'key,summary,status,priority',
-        'maxResults': 1000
+{
+  "tickets_by_fix_version": [
+    {
+      "key": "PROJ-123",
+      "summary": "Ticket summary",
+      "type": "Bug"
     }
-    
-    tests_data = self.make_request('search', params)
-    
-    # Rest of your existing logic for counting tests...
-```
-
-## 2. Fix Test Plan Query
-
-```python
-def get_test_plan_results(self) -> Dict:
-    """Get results for test plan from environment variable"""
-    test_plan_key = os.getenv('TEST_PLAN_KEY')
-    
-    if not test_plan_key:
-        return {}
-    
-    # Get test plan details
-    plan_details = self.make_request(f'issue/{test_plan_key}')
-    
-    # FIXED: Correct JQL for test executions in test plan
-    params = {
-        'jql': f'issueFunction in testPlanTests("{test_plan_key}")',
-        'fields': 'key,summary,status',
-        'maxResults': 1000
-    }
-    
-    tests_data = self.make_request('search', params)
-    
-    # Count tests directly from test plan
-    total_tests = len(tests_data.get('issues', []))
-    
-    # Count statuses
-    passed_tests = 0
-    failed_tests = 0
-    other_tests = 0
-    
-    for test in tests_data.get('issues', []):
-        status = test['fields']['status']['name'].upper()
-        if status in ['PASS', 'PASSED']:
-            passed_tests += 1
-        elif status in ['FAIL', 'FAILED']:
-            failed_tests += 1
-        else:
-            other_tests += 1
-    
-    success_rate = round((passed_tests / total_tests) * 100, 2) if total_tests > 0 else 0
-    
-    return {
-        'test_plan_key': test_plan_key,
-        'test_plan_summary': plan_details['fields']['summary'],
-        'total_tests': total_tests,
-        'passed_tests': passed_tests,
-        'failed_tests': failed_tests,
-        'other_tests': other_tests,
-        'success_rate': success_rate
-    }
-```
-
-## 3. Remove Test Cases Table
-
-In the HTML generation, remove the test details table from `_generate_test_execution_section()`:
-
-```python
-def _generate_test_execution_section(self) -> str:
-    if not self.report_data['test_execution_results']:
-        return ""
-    
-    exec_data = self.report_data['test_execution_results']
-    
-    return f"""
-    <div class="section">
-        <h2>Test Execution: {exec_data['test_execution_key']}</h2>
-        <p><strong>Summary:</strong> {exec_data['test_execution_summary']}</p>
-        
-        <table>
-            <tr><th>Total Tests</th><td>{exec_data['total_tests']}</td></tr>
-            <tr><th>Passed Tests</th><td>{exec_data['passed_tests']}</td></tr>
-            <tr><th>Failed Tests</th><td>{exec_data['failed_tests']}</td></tr>
-            <tr><th>Success Rate</th><td><strong>{exec_data['success_rate']}%</strong></td></tr>
-        </table>
-    </div>
-    """
-```
-
-## 4. Fix Summary Cards Logic
-
-Update `_generate_summary_cards()` to use correct data:
-
-```python
-def _generate_summary_cards(self) -> str:
-    cards = []
-    
-    # Tickets card
-    if self.report_data['fix_version_tickets']:
-        cards.append(f"""
-        <div class="card info">
-            <h3>Total Tickets</h3>
-            <div class="value">{len(self.report_data['fix_version_tickets'])}</div>
-        </div>
-        """)
-    
-    # Test Execution cards - FIXED: Check if data exists and has values
-    if self.report_data['test_execution_results'] and self.report_data['test_execution_results'].get('total_tests', 0) > 0:
-        exec_data = self.report_data['test_execution_results']
-        cards.extend([
-            f"""
-            <div class="card success">
-                <h3>Tests Passed</h3>
-                <div class="value">{exec_data['passed_tests']}</div>
-            </div>
-            """,
-            f"""
-            <div class="card danger">
-                <h3>Tests Failed</h3>
-                <div class="value">{exec_data['failed_tests']}</div>
-            </div>
-            """,
-            f"""
-            <div class="card info">
-                <h3>Success Rate</h3>
-                <div class="value">{exec_data['success_rate']}%</div>
-            </div>
-            """
-        ])
-    
-    # Test Plan cards - FIXED: Check if data exists and has values
-    if self.report_data['test_plan_results'] and self.report_data['test_plan_results'].get('total_tests', 0) > 0:
-        plan_data = self.report_data['test_plan_results']
-        cards.extend([
-            f"""
-            <div class="card warning">
-                <h3>Plan Tests</h3>
-                <div class="value">{plan_data['total_tests']}</div>
-            </div>
-            """,
-            f"""
-            <div class="card info">
-                <h3>Plan Success</h3>
-                <div class="value">{plan_data['success_rate']}%</div>
-            </div>
-            """
-        ])
-    
-    return f'<div class="summary-cards">{"".join(cards)}</div>'
-```
-
-## 5. Professional Stakeholder CSS
-
-Replace the CSS with this formal, letter-style design:
-
-```css
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-    
-    * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-    }
-    
-    body {
-        font-family: 'Inter', sans-serif;
-        line-height: 1.6;
-        color: #2D3748;
-        background: #ffffff;
-        padding: 40px 20px;
-        font-size: 14px;
-    }
-    
-    .report-container {
-        max-width: 800px;
-        margin: 0 auto;
-        background: white;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        border: 1px solid #E2E8F0;
-    }
-    
-    .letter-head {
-        background: #1E40AF;
-        color: white;
-        padding: 40px;
-        text-align: center;
-        border-bottom: 4px solid #1E3A8A;
-    }
-    
-    .letter-head h1 {
-        font-size: 28px;
-        font-weight: 600;
-        margin-bottom: 8px;
-    }
-    
-    .letter-head .subtitle {
-        font-size: 16px;
-        opacity: 0.9;
-        font-weight: 400;
-    }
-    
-    .content-section {
-        padding: 32px 40px;
-        border-bottom: 1px solid #E2E8F0;
-    }
-    
-    .content-section:last-child {
-        border-bottom: none;
-    }
-    
-    .section-title {
-        font-size: 18px;
-        font-weight: 600;
-        color: #1E40AF;
-        margin-bottom: 20px;
-        padding-bottom: 8px;
-        border-bottom: 2px solid #E2E8F0;
-    }
-    
-    .metrics-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 16px;
-        margin-bottom: 24px;
-    }
-    
-    .metric-card {
-        background: #F8FAFC;
-        padding: 20px;
-        border-radius: 6px;
-        border-left: 4px solid #1E40AF;
-        text-align: center;
-    }
-    
-    .metric-card.success { border-left-color: #059669; }
-    .metric-card.warning { border-left-color: #D97706; }
-    .metric-card.danger { border-left-color: #DC2626; }
-    
-    .metric-value {
-        font-size: 24px;
-        font-weight: 700;
-        color: #1F2937;
-        margin-bottom: 4px;
-    }
-    
-    .metric-label {
-        font-size: 12px;
-        color: #6B7280;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    .data-table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 16px;
-        font-size: 13px;
-    }
-    
-    .data-table th {
-        background: #F8FAFC;
-        padding: 12px 16px;
-        text-align: left;
-        font-weight: 600;
-        color: #374151;
-        border-bottom: 1px solid #E5E7EB;
-    }
-    
-    .data-table td {
-        padding: 12px 16px;
-        border-bottom: 1px solid #F3F4F6;
-    }
-    
-    .data-table tr:last-child td {
-        border-bottom: none;
-    }
-    
-    .status-badge {
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 11px;
-        font-weight: 600;
-    }
-    
-    .status-pass { background: #D1FAE5; color: #065F46; }
-    .status-fail { background: #FEE2E2; color: #991B1B; }
-    
-    .footer {
-        padding: 24px 40px;
-        background: #F8FAFC;
-        text-align: center;
-        color: #6B7280;
-        font-size: 12px;
-        border-top: 1px solid #E2E8F0;
-    }
-</style>
-```
-
-These fixes should resolve the 400 errors, correct the counts, remove test cases, and provide a professional stakeholder-friendly format.
+  ],
+  "test_plan_analysis": {
+    "test_plan_key": "TP-123",
+    "summary": {
+      "total_tests": 150,
+      "passed_tests": 130,
+      "failed_tests": 20,
+      "total_executions": 5
+    },
+    "executions": [
+      {
+        "execution_key": "TEMP-456",
+        "execution_summary": "Sprint 16 Execution",
+        "execution_status": "Done",
+        "results": {
+          "total_tests": 50,
+          "passed_tests": 45,
+          "failed_tests": 5,
+          "tests_details": [...]
+        }
+      }
+    ],
+    "failed_tests_with_bugs": [
+      {
+        "test_key": "TEST-789",
+        "test_summary": "Test case summary",
+        "execution_key": "TEMP-456",
+        "bug_ids": ["BUG-123", "BUG-456"]
+      }
+    ]
+  }
+}
