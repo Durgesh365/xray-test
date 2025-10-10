@@ -1,39 +1,311 @@
-{
-  "tickets_by_fix_version": [
-    {
-      "key": "PROJ-123",
-      "summary": "Ticket summary",
-      "type": "Bug"
-    }
-  ],
-  "test_plan_analysis": {
-    "test_plan_key": "TP-123",
-    "summary": {
-      "total_tests": 150,
-      "passed_tests": 130,
-      "failed_tests": 20,
-      "total_executions": 5
-    },
-    "executions": [
-      {
-        "execution_key": "TEMP-456",
-        "execution_summary": "Sprint 16 Execution",
-        "execution_status": "Done",
-        "results": {
-          "total_tests": 50,
-          "passed_tests": 45,
-          "failed_tests": 5,
-          "tests_details": [...]
+import os
+import requests
+import base64
+import json
+from typing import Dict, List
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+class JiraXrayAnalyzer:
+    def __init__(self):
+        self.jira_url = os.getenv('JIRA_URL')
+        self.email = os.getenv('JIRA_EMAIL')
+        self.api_token = os.getenv('JIRA_API_TOKEN')
+        
+        # Create Basic Auth header
+        credentials = f"{self.email}:{self.api_token}"
+        encoded_credentials = base64.b64encode(credentials.encode()).decode()
+        
+        self.headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Basic {encoded_credentials}'
         }
-      }
-    ],
-    "failed_tests_with_bugs": [
-      {
-        "test_key": "TEST-789",
-        "test_summary": "Test case summary",
-        "execution_key": "TEMP-456",
-        "bug_ids": ["BUG-123", "BUG-456"]
-      }
-    ]
-  }
-}
+        
+        # Validate required environment variables
+        if not all([self.jira_url, self.email, self.api_token]):
+            raise ValueError("Missing required environment variables: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN")
+
+    def make_request(self, endpoint: str, params: Dict = None) -> Dict:
+        """Make API request to Jira"""
+        url = f"{self.jira_url}/rest/api/3/{endpoint}"
+        response = requests.get(url, headers=self.headers, params=params)
+        
+        if response.status_code == 401:
+            raise Exception("Authentication failed. Please check your JIRA_EMAIL and JIRA_API_TOKEN")
+        elif response.status_code == 404:
+            raise Exception(f"Resource not found: {url}")
+        
+        response.raise_for_status()
+        return response.json()
+
+    def make_xray_request(self, endpoint: str, params: Dict = None) -> Dict:
+        """Make API request to Xray specific endpoints"""
+        url = f"{self.jira_url}/rest/raven/1.0/{endpoint}"
+        response = requests.get(url, headers=self.headers, params=params)
+        
+        if response.status_code == 401:
+            raise Exception("Authentication failed. Please check your JIRA_EMAIL and JIRA_API_TOKEN")
+        elif response.status_code == 404:
+            raise Exception(f"Xray resource not found: {url}")
+        
+        response.raise_for_status()
+        return response.json()
+
+    def get_tickets_by_fix_version(self) -> List[Dict]:
+        """Get tickets based on fix version from environment variable"""
+        fix_version = os.getenv('FIX_VERSION')
+        project_key = os.getenv('PROJECT_KEY')
+        
+        if not fix_version:
+            return []
+        
+        jql = f'fixVersion = "{fix_version}"'
+        if project_key:
+            jql = f'project = {project_key} AND {jql}'
+        
+        params = {
+            'jql': jql,
+            'fields': 'key,summary,issuetype',
+            'maxResults': 1000
+        }
+        
+        data = self.make_request('search', params)
+        
+        tickets = []
+        for issue in data.get('issues', []):
+            tickets.append({
+                'key': issue['key'],
+                'summary': issue['fields']['summary'],
+                'type': issue['fields']['issuetype']['name']
+            })
+        
+        return tickets
+
+    def get_test_executions_from_plan(self, test_plan_key: str) -> List[Dict]:
+        """Get all test executions from a test plan"""
+        try:
+            # Try Xray API first
+            endpoint = f"api/testplan/{test_plan_key}/testexecution"
+            executions_data = self.make_xray_request(endpoint)
+            
+            executions = []
+            for execution in executions_data:
+                executions.append({
+                    'key': execution.get('key'),
+                    'summary': execution.get('summary'),
+                    'status': execution.get('status')
+                })
+            return executions
+            
+        except Exception as e:
+            print(f"Xray API failed, using JQL fallback: {e}")
+            # Fallback to JQL
+            params = {
+                'jql': f'issue in testPlans("{test_plan_key}") and issuetype = "Test Execution"',
+                'fields': 'key,summary,status',
+                'maxResults': 1000
+            }
+            
+            data = self.make_request('search', params)
+            
+            executions = []
+            for issue in data.get('issues', []):
+                executions.append({
+                    'key': issue['key'],
+                    'summary': issue['fields']['summary'],
+                    'status': issue['fields']['status']['name']
+                })
+            return executions
+
+    def get_test_results_from_execution(self, test_execution_key: str) -> Dict:
+        """Get test results from a specific test execution"""
+        try:
+            # Try Xray API first
+            endpoint = f"api/testexec/{test_execution_key}/test"
+            tests_data = self.make_xray_request(endpoint)
+            
+            return self._process_test_results(tests_data, test_execution_key)
+            
+        except Exception as e:
+            print(f"Xray API failed for execution {test_execution_key}, using JQL fallback: {e}")
+            return self._get_test_results_via_jql(test_execution_key)
+
+    def _process_test_results(self, tests_data: List, test_execution_key: str) -> Dict:
+        """Process test results from Xray API response"""
+        total_tests = 0
+        passed_tests = 0
+        failed_tests = 0
+        tests_details = []
+        
+        for test in tests_data:
+            total_tests += 1
+            status = test.get('status', '').upper()
+            
+            if status in ['PASS', 'PASSED', 'EXECUTING']:
+                passed_tests += 1
+            elif status in ['FAIL', 'FAILED']:
+                failed_tests += 1
+            
+            # Get defects from Xray response
+            defects = test.get('defects', [])
+            bug_ids = [defect.get('key', '') for defect in defects if defect.get('key')]
+            
+            tests_details.append({
+                'test_key': test.get('key', ''),
+                'test_summary': test.get('summary', ''),
+                'status': status,
+                'bug_ids': bug_ids
+            })
+        
+        return {
+            'test_execution_key': test_execution_key,
+            'total_tests': total_tests,
+            'passed_tests': passed_tests,
+            'failed_tests': failed_tests,
+            'tests_details': tests_details
+        }
+
+    def _get_test_results_via_jql(self, test_execution_key: str) -> Dict:
+        """Fallback method using JQL to get test results"""
+        params = {
+            'jql': f'issue in testExecutions("{test_execution_key}")',
+            'fields': 'key,status,summary,customfield_10030',
+            'maxResults': 1000
+        }
+        
+        data = self.make_request('search', params)
+        
+        total_tests = 0
+        passed_tests = 0
+        failed_tests = 0
+        tests_details = []
+        
+        for test in data.get('issues', []):
+            total_tests += 1
+            status = test['fields']['status']['name'].upper()
+            
+            if status in ['PASS', 'PASSED']:
+                passed_tests += 1
+            elif status in ['FAIL', 'FAILED']:
+                failed_tests += 1
+            
+            # Get defects
+            defects = test['fields'].get('customfield_10030', [])
+            bug_ids = [defect['key'] for defect in defects]
+            
+            tests_details.append({
+                'test_key': test['key'],
+                'test_summary': test['fields']['summary'],
+                'status': status,
+                'bug_ids': bug_ids
+            })
+        
+        return {
+            'test_execution_key': test_execution_key,
+            'total_tests': total_tests,
+            'passed_tests': passed_tests,
+            'failed_tests': failed_tests,
+            'tests_details': tests_details
+        }
+
+    def get_test_plan_analysis(self) -> Dict:
+        """Main method to get complete test plan analysis"""
+        test_plan_key = os.getenv('TEST_PLAN_KEY')
+        
+        if not test_plan_key:
+            return {"error": "TEST_PLAN_KEY not set in environment variables"}
+        
+        print(f"Analyzing test plan: {test_plan_key}")
+        
+        # Get all test executions from the test plan
+        executions = self.get_test_executions_from_plan(test_plan_key)
+        print(f"Found {len(executions)} test executions")
+        
+        execution_results = []
+        total_aggregated = {
+            'total_tests': 0,
+            'passed_tests': 0,
+            'failed_tests': 0,
+            'total_executions': len(executions)
+        }
+        
+        # Get results for each test execution
+        for execution in executions:
+            execution_key = execution['key']
+            print(f"Processing execution: {execution_key}")
+            
+            results = self.get_test_results_from_execution(execution_key)
+            
+            execution_results.append({
+                'execution_key': execution_key,
+                'execution_summary': execution['summary'],
+                'execution_status': execution['status'],
+                'results': results
+            })
+            
+            # Aggregate results
+            total_aggregated['total_tests'] += results['total_tests']
+            total_aggregated['passed_tests'] += results['passed_tests']
+            total_aggregated['failed_tests'] += results['failed_tests']
+        
+        # Prepare final JSON output
+        analysis_result = {
+            'test_plan_key': test_plan_key,
+            'summary': total_aggregated,
+            'executions': execution_results,
+            'failed_tests_with_bugs': self._extract_failed_tests_with_bugs(execution_results)
+        }
+        
+        return analysis_result
+
+    def _extract_failed_tests_with_bugs(self, execution_results: List) -> List[Dict]:
+        """Extract all failed tests that have bug IDs associated"""
+        failed_with_bugs = []
+        
+        for execution in execution_results:
+            results = execution['results']
+            for test_detail in results.get('tests_details', []):
+                if test_detail['status'] in ['FAIL', 'FAILED'] and test_detail['bug_ids']:
+                    failed_with_bugs.append({
+                        'test_key': test_detail['test_key'],
+                        'test_summary': test_detail['test_summary'],
+                        'execution_key': execution['execution_key'],
+                        'bug_ids': test_detail['bug_ids']
+                    })
+        
+        return failed_with_bugs
+
+def main():
+    try:
+        analyzer = JiraXrayAnalyzer()
+        
+        # Collect all analysis results
+        results = {}
+        
+        # 1. Get tickets by fix version
+        if os.getenv('FIX_VERSION'):
+            print("Fetching tickets by fix version...")
+            results['tickets_by_fix_version'] = analyzer.get_tickets_by_fix_version()
+        
+        # 2. Get test plan analysis (main focus)
+        if os.getenv('TEST_PLAN_KEY'):
+            print("Analyzing test plan...")
+            results['test_plan_analysis'] = analyzer.get_test_plan_analysis()
+        
+        # Output as JSON
+        print("\n" + "="*50)
+        print("ANALYSIS RESULTS (JSON):")
+        print("="*50)
+        print(json.dumps(results, indent=2))
+        
+    except Exception as e:
+        error_result = {"error": str(e)}
+        print(json.dumps(error_result, indent=2))
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
