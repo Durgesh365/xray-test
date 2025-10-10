@@ -1,97 +1,96 @@
-Here are the specific fixes:
+Here are the specific modifications:
 
-## 1. Generate JSON file instead of printing
+## 1. Create proper JSON output instead of printing
 
-Replace the main() function with:
+Replace the `main()` function with:
 ```python
+import json
+
 def main():
     try:
         analyzer = JiraXrayAnalyzer()
         results = {}
         
+        # 1. Get tickets by fix version
         if os.getenv('FIX_VERSION'):
             results['tickets_by_fix_version'] = analyzer.get_tickets_by_fix_version()
         
+        # 2. Get test plan results (this will dynamically get executions)
         if os.getenv('TEST_PLAN_KEY'):
-            results['test_plan_analysis'] = analyzer.get_test_plan_analysis()
+            results['test_plan_analysis'] = analyzer.get_test_plan_results()
         
-        # Write to JSON file
+        # Write results to JSON file
         output_file = 'jira_analysis_results.json'
         with open(output_file, 'w') as f:
-            json.dump(results, indent=2, fp=f)
+            json.dump(results, f, indent=2)
         
-        print(f"Results saved to {output_file}")
+        print(f"Analysis completed! Results saved to {output_file}")
         
     except Exception as e:
         error_result = {"error": str(e)}
         with open('jira_analysis_error.json', 'w') as f:
-            json.dump(error_result, indent=2, fp=f)
+            json.dump(error_result, f, indent=2)
+        print(f"Error: {e}")
 ```
 
-## 2. Fix for test_summary not showing
+## 2. Remove test execution key dependency and enhance test plan method
 
-In `_process_test_results()` method, change the test summary extraction:
+Remove the `get_test_execution_results()` method entirely and update `get_test_plan_results()`:
+
 ```python
-def _process_test_results(self, tests_data: List, test_execution_key: str) -> Dict:
-    # ... existing code ...
-    for test in tests_data:
-        total_tests += 1
-        status = test.get('status', '').upper()
+def get_test_plan_results(self) -> Dict:
+    """Get results for test plan from environment variable"""
+    test_plan_key = os.getenv('TEST_PLAN_KEY')
+    
+    if not test_plan_key:
+        return {"error": "TEST_PLAN_KEY not set in environment variables"}
+    
+    # Get test executions linked to the test plan using Xray API
+    try:
+        xray_endpoint = f"api/testplan/{test_plan_key}/testexecution"
+        executions_data = self.make_xray_request(xray_endpoint)
         
-        # Fix for test summary - try multiple possible fields
-        test_summary = (test.get('summary') or 
-                       test.get('testSummary') or 
-                       test.get('name') or 
-                       'No summary available')
+        execution_results = []
+        total_aggregated = {
+            'total_tests': 0,
+            'passed_tests': 0,
+            'failed_tests': 0,
+            'failed_tests_with_bugs': []
+        }
         
-        # ... rest of processing ...
-        tests_details.append({
-            'test_key': test.get('key', ''),
-            'test_summary': test_summary,  # Use the extracted summary
-            'status': status,
-            'bug_ids': bug_ids
-        })
+        for execution in executions_data:
+            execution_key = execution.get('key')
+            if execution_key:
+                # Get results for each execution dynamically
+                execution_result = self.get_test_execution_results_specific(execution_key)
+                if execution_result:
+                    execution_results.append({
+                        'execution_key': execution_key,
+                        'execution_summary': execution.get('summary', ''),
+                        'results': execution_result
+                    })
+                    
+                    # Aggregate results
+                    total_aggregated['total_tests'] += execution_result['total_tests']
+                    total_aggregated['passed_tests'] += execution_result['passed_tests']
+                    total_aggregated['failed_tests'] += execution_result['failed_tests']
+                    total_aggregated['failed_tests_with_bugs'].extend(execution_result['failed_tests_with_bugs'])
+        
+        return {
+            'test_plan_key': test_plan_key,
+            'summary': total_aggregated,
+            'execution_details': execution_results
+        }
+        
+    except Exception as e:
+        print(f"Xray test plan API failed: {e}")
+        # Fallback to JQL method
+        return self._get_test_plan_via_jql(test_plan_key)
 ```
 
-## 3. Fix for bugs not showing
+Also remove the test execution key section from the main function since we're only using test plan now.
 
-The issue is likely with the defects field. Try this enhanced bug extraction:
-```python
-def _process_test_results(self, tests_data: List, test_execution_key: str) -> Dict:
-    # ... existing code ...
-    for test in tests_data:
-        # ... status counting ...
-        
-        # Enhanced bug extraction - try multiple possible fields
-        bug_ids = []
-        
-        # Try Xray defects field
-        defects = test.get('defects', [])
-        if defects:
-            for defect in defects:
-                if isinstance(defect, dict) and defect.get('key'):
-                    bug_ids.append(defect['key'])
-                elif isinstance(defect, str):
-                    bug_ids.append(defect)
-        
-        # Try Jira defects custom field
-        if not bug_ids:
-            defects_custom = test.get('customfield_10030', [])
-            for defect in defects_custom:
-                if isinstance(defect, dict) and defect.get('key'):
-                    bug_ids.append(defect['key'])
-        
-        # Try generic defects field
-        if not bug_ids:
-            generic_defects = test.get('defectIds', [])
-            bug_ids.extend([d for d in generic_defects if d])
-        
-        tests_details.append({
-            'test_key': test.get('key', ''),
-            'test_summary': test_summary,
-            'status': status,
-            'bug_ids': bug_ids
-        })
-```
-
-These three fixes should resolve your issues with file output, missing summaries, and missing bug IDs.
+These changes will:
+1. Generate a proper JSON file instead of console output
+2. Dynamically fetch all test executions from the test plan without needing TEST_EXECUTION_KEY in .env
+3. Provide cleaner JSON structure with summary and execution details
