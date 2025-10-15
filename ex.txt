@@ -1,96 +1,232 @@
-Here are the specific modifications:
-
-## 1. Create proper JSON output instead of printing
-
-Replace the `main()` function with:
-```python
+import os
+import requests
 import json
+import base64
+from typing import Dict, List, Optional
+from dotenv import load_dotenv
+from jinja2 import Environment, FileSystemLoader
+from datetime import datetime
 
-def main():
-    try:
-        analyzer = JiraXrayAnalyzer()
-        results = {}
-        
-        # 1. Get tickets by fix version
-        if os.getenv('FIX_VERSION'):
-            results['tickets_by_fix_version'] = analyzer.get_tickets_by_fix_version()
-        
-        # 2. Get test plan results (this will dynamically get executions)
-        if os.getenv('TEST_PLAN_KEY'):
-            results['test_plan_analysis'] = analyzer.get_test_plan_results()
-        
-        # Write results to JSON file
-        output_file = 'jira_analysis_results.json'
-        with open(output_file, 'w') as f:
-            json.dump(results, f, indent=2)
-        
-        print(f"Analysis completed! Results saved to {output_file}")
-        
-    except Exception as e:
-        error_result = {"error": str(e)}
-        with open('jira_analysis_error.json', 'w') as f:
-            json.dump(error_result, f, indent=2)
-        print(f"Error: {e}")
-```
+load_dotenv()
 
-## 2. Remove test execution key dependency and enhance test plan method
 
-Remove the `get_test_execution_results()` method entirely and update `get_test_plan_results()`:
-
-```python
-def get_test_plan_results(self) -> Dict:
-    """Get results for test plan from environment variable"""
-    test_plan_key = os.getenv('TEST_PLAN_KEY')
-    
-    if not test_plan_key:
-        return {"error": "TEST_PLAN_KEY not set in environment variables"}
-    
-    # Get test executions linked to the test plan using Xray API
-    try:
-        xray_endpoint = f"api/testplan/{test_plan_key}/testexecution"
-        executions_data = self.make_xray_request(xray_endpoint)
+class JiraXrayAnalyzer:
+    def __init__(self):
+        self.jira_url = os.getenv('JIRA_URL')
+        self.email = os.getenv('JIRA_EMAIL')
+        self.api_token = os.getenv('JIRA_API_TOKEN')
         
-        execution_results = []
+        if not all([self.jira_url, self.email, self.api_token]):
+            raise ValueError("Missing required environment variables: JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN")
+        
+        auth_string = f"{self.email}:{self.api_token}"
+        auth_bytes = auth_string.encode('ascii')
+        base64_auth = base64.b64encode(auth_bytes).decode('ascii')
+        
+        self.headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': f'Basic {base64_auth}'
+        }
+
+    def load_config(self, config_path="config.json"):
+        try:
+            with open(config_path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
+        url = f"{self.jira_url}/rest/api/2/{endpoint}"
+        print(f"Making JIRA Request to: {url}")
+        response = requests.get(url, headers=self.headers, params=params if params else {})
+        response.raise_for_status()
+        return response.json()
+
+    def make_xray_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
+        url = f"{self.jira_url}/rest/raven/1.0/{endpoint}"
+        print(f"Making XRAY Request to: {url}")
+        response = requests.get(url, headers=self.headers, params=params if params else {})
+        response.raise_for_status()
+        return response.json()
+
+    def get_tickets_by_fix_version(self, fix_version, project_key) -> List[Dict]:
+        if not fix_version:
+            print("FIX_VERSION not set in environment variables")
+            return []
+        
+        jql = f'fixVersion = "{fix_version}"'
+        if project_key:
+            jql = f'project = {project_key} AND {jql}'
+        
+        params = {
+            'jql': jql,
+            'fields': 'key,summary,issuetype',
+            'maxResults': 1000
+        }
+        
+        data = self.make_request('search', params)
+        tickets = []
+        for issue in data.get('issues', []):
+            tickets.append({
+                'key': issue['key'],
+                'summary': issue['fields']['summary'],
+                'type': issue['fields']['issuetype']['name']
+            })
+        return tickets
+
+    def get_labels_for_issue(self, issue_key: str) -> List[str]:
+        params = {"fields": "labels"}
+        data = self.make_request(f"issue/{issue_key}", params)
+        return data.get("fields", {}).get("labels", [])
+
+    def get_test_plan_results(self, test_plan_key) -> Dict:
+        if not test_plan_key:
+            print("TEST_PLAN_KEY not set in environment variables")
+            return {}
+        
+        executions = self.make_xray_request(f"api/testplan/{test_plan_key}/testexecution")
+        all_results = []
         total_aggregated = {
             'total_tests': 0,
             'passed_tests': 0,
             'failed_tests': 0,
-            'failed_tests_with_bugs': []
+            'failed_tests_details': []
         }
         
-        for execution in executions_data:
+        for execution in executions:
             execution_key = execution.get('key')
             if execution_key:
-                # Get results for each execution dynamically
-                execution_result = self.get_test_execution_results_specific(execution_key)
-                if execution_result:
-                    execution_results.append({
-                        'execution_key': execution_key,
-                        'execution_summary': execution.get('summary', ''),
-                        'results': execution_result
-                    })
-                    
-                    # Aggregate results
-                    total_aggregated['total_tests'] += execution_result['total_tests']
-                    total_aggregated['passed_tests'] += execution_result['passed_tests']
-                    total_aggregated['failed_tests'] += execution_result['failed_tests']
-                    total_aggregated['failed_tests_with_bugs'].extend(execution_result['failed_tests_with_bugs'])
+                labels = self.get_labels_for_issue(execution_key)
+                sprint_label = next((l for l in labels if l.lower().startswith('sprint')), "")
+                
+                execution_results = self.get_failed_tests_with_defect_urls(execution_key)
+                execution_results["sprint"] = sprint_label
+                all_results.append(execution_results)
+                
+                total_aggregated['total_tests'] += execution_results['total_tests']
+                total_aggregated['passed_tests'] += execution_results['passed_tests']
+                total_aggregated['failed_tests'] += execution_results['failed_tests']
+                total_aggregated['failed_tests_details'].extend(execution_results['failed_tests_details'])
         
         return {
             'test_plan_key': test_plan_key,
-            'summary': total_aggregated,
-            'execution_details': execution_results
+            'execution_results': all_results,
+            'aggregated_results': total_aggregated
+        }
+
+    def get_failed_tests_with_defect_urls(self, test_execution_key: str) -> dict:
+        endpoint = f"rest/raven/1.0/testruns"
+        params = {"testExecKey": test_execution_key}
+        url = f"{self.jira_url}/{endpoint}"
+        print(f"From get_failed_tests_with_defect_urls - Making XRAY Request to: {url}")
+        
+        response = requests.get(url, headers=self.headers, params=params)
+        response.raise_for_status()
+        testruns = response.json()
+        
+        failed_tests_details = []
+        total_tests = 0
+        passed_tests = 0
+        failed_tests = 0
+        failed_test_keys = []
+        
+        for run in testruns:
+            total_tests += 1
+            status = str(run.get("status", "")).upper()
+            test_key = run.get("testKey", "")
+            defects = run.get("defects", [])
+            
+            if status in ["FAIL", "FAILED"]:
+                failed_tests += 1
+                failed_test_keys.append(test_key)
+                failed_tests_details.append({
+                    "test_key": test_key,
+                    "test_summary": "",
+                    "defects": defects
+                })
+            elif status in ["PASS", "PASSED"]:
+                passed_tests += 1
+        
+        summaries = self.get_test_summaries(failed_test_keys)
+        for detail in failed_tests_details:
+            detail["test_summary"] = summaries.get(detail["test_key"], "")
+        
+        return {
+            "test_execution_key": test_execution_key,
+            "total_tests": total_tests,
+            "passed_tests": passed_tests,
+            "failed_tests": failed_tests,
+            "failed_tests_details": failed_tests_details
+        }
+
+    def get_test_summaries(self, test_keys: List[str]) -> Dict[str, str]:
+        if not test_keys:
+            return {}
+        
+        jql = 'key in (' + ','.join(test_keys) + ')'
+        params = {
+            'jql': jql,
+            'fields': 'summary',
+            'maxResults': len(test_keys)
         }
         
+        data = self.make_request('search', params)
+        return {
+            issue['key']: issue['fields'].get('summary', '') 
+            for issue in data.get('issues', [])
+        }
+
+    def render_html_report_with_jinja(self, results: dict, template_path: str, output_path: str):
+        env = Environment(loader=FileSystemLoader('.'))
+        template = env.get_template(template_path)
+        
+        results['generated_date'] = datetime.now().strftime('%B %d, %Y at %H:%M')
+        results['generated_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        html = template.render(**results)
+        with open(output_path, "w") as f:
+            f.write(html)
+        print(f"HTML report written to {output_path}")
+
+
+def main():
+    config = {}
+    try:
+        analyzer = JiraXrayAnalyzer()
+        results = {}
+        config = analyzer.load_config()
+        
+        FIX_VERSION = config.get("FIX_VERSION")
+        TEST_PLAN_KEY = config.get("TEST_PLAN_KEY")
+        PROJECT_KEY = config.get("PROJECT_KEY")
+        
+        if FIX_VERSION:
+            results['tickets_by_fix_version'] = analyzer.get_tickets_by_fix_version(FIX_VERSION, PROJECT_KEY)
+            results['FIX_VERSION'] = FIX_VERSION
+        
+        if TEST_PLAN_KEY:
+            results['test_plan_analysis'] = analyzer.get_test_plan_results(TEST_PLAN_KEY)
+        
+        if config.get("jira_ticket_link"):
+            results["jira_ticket_link"] = config["jira_ticket_link"]
+        
+        if config.get("mito_latest_version_link"):
+            results["mito_latest_version_link"] = config["mito_latest_version_link"]
+        
+        output_file = f'jira_analysis_results_{config.get("FIX_VERSION", "report")}.json'
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"Analysis completed! Results saved to {output_file}")
+        
+        analyzer.render_html_report_with_jinja(results, "template.html", "jira_analysis_report.html")
+        
     except Exception as e:
-        print(f"Xray test plan API failed: {e}")
-        # Fallback to JQL method
-        return self._get_test_plan_via_jql(test_plan_key)
-```
+        error_result = {"error": str(e)}
+        with open(f'jira_analysis_error_{config.get("fix_version", "unknown")}.json', 'w') as f:
+            json.dump(error_result, f, indent=2)
+        print(f"Error: {e}")
 
-Also remove the test execution key section from the main function since we're only using test plan now.
 
-These changes will:
-1. Generate a proper JSON file instead of console output
-2. Dynamically fetch all test executions from the test plan without needing TEST_EXECUTION_KEY in .env
-3. Provide cleaner JSON structure with summary and execution details
+if __name__ == "__main__":
+    main()
