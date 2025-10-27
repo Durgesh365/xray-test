@@ -4,304 +4,218 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Test Execution Report - {{ FIX_VERSION }}</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
         }
-
-        body {
-            font-family: 'Segoe UI', Arial, sans-serif;
-            background-color: #f9f9f9;
-            color: #333;
-            line-height: 1.6;
-            padding: 20px;
+        
+        body { 
+            font-family: 'Segoe UI', Arial, sans-serif; 
+            color: #333; 
+            line-height: 1.4; 
+            padding: 15px; 
+            background-color: #f5f5f5;
         }
-
-        .report-container {
-            max-width: 210mm;
-            margin: 0 auto;
-            background: white;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        
+        .report-container { 
+            max-width: 210mm; 
+            margin: 0 auto; 
+            background: white; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
-
-        .header {
-            background: #7000ba;
-            color: white;
-            padding: 30px 40px;
-            border-bottom: 2px solid #5a009a;
-        }
-
-        .logo-section {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-
-        .logo-placeholder {
-            width: 150px;
-            height: 50px;
-            background: white;
-            border-radius: 3px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #7000ba;
-            font-weight: 600;
-            font-size: 13px;
-        }
-
-        .report-metadata {
-            text-align: right;
-            font-size: 13px;
-        }
-
-        .header h1 {
-            font-size: 28px;
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-
-        .header .subtitle {
-            font-size: 15px;
-            opacity: 0.9;
-        }
-
-        .content {
-            padding: 30px 40px;
-        }
-
-        .section {
-            margin-bottom: 35px;
-        }
-
-        .section-title {
-            font-size: 20px;
-            color: #7000ba;
-            margin-bottom: 15px;
-            padding-bottom: 8px;
-            border-bottom: 2px solid #7000ba;
-            font-weight: 600;
-        }
-
-        .executive-summary {
-            background: #f8f4fc;
-            border-left: 3px solid #7000ba;
-            padding: 20px;
-            margin-bottom: 25px;
-        }
-
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
-        }
-
-        .metric-card {
-            background: white;
-            padding: 18px;
-            text-align: center;
-            border: 1px solid #e5e5e5;
-            border-top: 2px solid #7000ba;
-        }
-
-        .metric-value {
-            font-size: 32px;
-            font-weight: bold;
-            color: #7000ba;
-            margin: 8px 0;
-        }
-
-        .metric-label {
-            font-size: 13px;
-            color: #666;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .metric-card.success .metric-value {
-            color: #059669;
-        }
-
-        .metric-card.success {
-            border-top-color: #10b981;
-        }
-
-        .metric-card.danger .metric-value {
-            color: #dc2626;
-        }
-
-        .metric-card.danger {
-            border-top-color: #ef4444;
-        }
-
-        .chart-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-            background: #fafafa;
-            margin: 15px 0;
-        }
-
-        .chart-wrapper {
-            width: 100%;
-            max-width: 280px;
-            height: 280px;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-            background: white;
-        }
-
-        th {
-            background: #7000ba;
-            color: white;
-            padding: 12px;
-            text-align: left;
-            font-weight: 600;
-            font-size: 13px;
-            text-transform: uppercase;
-        }
-
-        td {
-            padding: 10px 12px;
+        
+        .header { 
+            padding: 20px; 
             border-bottom: 1px solid #e5e5e5;
-            font-size: 14px;
         }
-
-        tr:nth-child(even) {
-            background-color: #fafafa;
+        
+        .logo-section { 
+            display: flex; 
+            justify-content: space-between; 
+            margin-bottom: 10px; 
         }
-
-        tr:hover {
-            background-color: #f8f4fc;
+        
+        .logo-placeholder { 
+            width: 120px; 
+            height: 40px; 
+            background: #7000ba; 
+            border-radius: 3px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            color: white; 
+            font-weight: 600; 
+            font-size: 12px; 
         }
-
-        tr.total-row {
-            background: #333;
-            color: white;
-            font-weight: bold;
-        }
-
-        tr.total-row td {
-            border-bottom: none;
-        }
-
-        a {
+        
+        .header h1 { 
+            font-size: 22px; 
+            font-weight: 600; 
+            margin-bottom: 5px; 
             color: #7000ba;
+        }
+        
+        .header .subtitle { 
+            font-size: 13px; 
+            color: #666; 
+        }
+        
+        .content { 
+            padding: 20px; 
+        }
+        
+        .section { 
+            margin-bottom: 25px; 
+        }
+        
+        .section-title { 
+            font-size: 18px; 
+            color: #7000ba; 
+            margin-bottom: 10px; 
+            padding-bottom: 5px; 
+            border-bottom: 1px solid #7000ba; 
+            font-weight: 600; 
+        }
+        
+        .metrics-grid { 
+            display: grid; 
+            grid-template-columns: repeat(3, 1fr); 
+            gap: 10px; 
+            margin: 10px 0; 
+        }
+        
+        .metric-card { 
+            background: white; 
+            padding: 12px; 
+            text-align: center; 
+            border: 1px solid #e5e5e5; 
+            border-top: 3px solid #7000ba;
+            height: 90px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        
+        .metric-value { 
+            font-size: 22px; 
+            font-weight: bold; 
+            color: #7000ba; 
+            margin: 3px 0; 
+        }
+        
+        .metric-label { 
+            font-size: 11px; 
+            color: #666; 
+            text-transform: uppercase; 
+        }
+        
+        .metric-card.success .metric-value { 
+            color: #059669; 
+        }
+        
+        .metric-card.success { 
+            border-top-color: #10b981; 
+        }
+        
+        .metric-card.danger .metric-value { 
+            color: #dc2626; 
+        }
+        
+        .metric-card.danger { 
+            border-top-color: #ef4444; 
+        }
+        
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 10px; 
+        }
+        
+        th { 
+            background: #7000ba; 
+            color: white; 
+            padding: 8px; 
+            text-align: left; 
+            font-size: 12px; 
+        }
+        
+        td { 
+            padding: 8px; 
+            border-bottom: 1px solid #e5e5e5; 
+            font-size: 13px; 
+        }
+        
+        tr:nth-child(even) { 
+            background-color: #fafafa; 
+        }
+        
+        .badge { 
+            display: inline-block; 
+            padding: 2px 8px; 
+            border-radius: 3px; 
+            font-size: 11px; 
+            font-weight: 600; 
+        }
+        
+        .badge-success { 
+            background: #d1fae5; 
+            color: #065f46; 
+        }
+        
+        .badge-danger { 
+            background: #fee2e2; 
+            color: #991b1b; 
+        }
+        
+        .badge-info { 
+            background: #f3e8ff; 
+            color: #6b21a8; 
+        }
+        
+        .footer { 
+            background: #333; 
+            color: white; 
+            padding: 15px; 
+            text-align: center; 
+            margin-top: 20px; 
+        }
+        
+        .footer p { 
+            margin: 3px 0; 
+            font-size: 12px; 
+        }
+        
+        .links-section { 
+            margin-bottom: 15px; 
+            padding: 10px 0;
+        }
+        
+        .links-section a { 
+            display: inline-block; 
+            margin: 0 15px 0 0; 
+            color: #7000ba; 
+            font-weight: 500; 
+            font-size: 13px; 
             text-decoration: none;
-            font-weight: 500;
         }
-
-        a:hover {
-            text-decoration: underline;
-        }
-
-        .badge {
-            display: inline-block;
-            padding: 3px 10px;
-            border-radius: 3px;
-            font-size: 12px;
-            font-weight: 600;
-        }
-
-        .badge-success {
-            background: #d1fae5;
-            color: #065f46;
-        }
-
-        .badge-danger {
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        .badge-info {
-            background: #f3e8ff;
-            color: #6b21a8;
-        }
-
-        .footer {
-            background: #333;
-            color: white;
-            padding: 20px 40px;
-            text-align: center;
-            border-top: 2px solid #7000ba;
-        }
-
-        .footer p {
-            margin: 4px 0;
-            font-size: 13px;
-        }
-
-        .links-section {
-            background: #f8f4fc;
-            padding: 15px;
-            margin-bottom: 20px;
-            border: 1px solid #e5e5e5;
-        }
-
-        .links-section a {
-            display: inline-block;
-            margin: 5px 12px 5px 0;
-            padding: 6px 14px;
-            background: white;
-            border: 1px solid #7000ba;
-            color: #7000ba;
-            font-weight: 500;
-            font-size: 13px;
-        }
-
-        .links-section a:hover {
-            background: #7000ba;
-            color: white;
-            text-decoration: none;
-        }
-
-        @media print {
-            body {
+        
+        @media print { 
+            body { 
+                padding: 0; 
                 background: white;
-                padding: 0;
-            }
+            } 
             
             .report-container {
                 box-shadow: none;
             }
-
-            table {
-                page-break-inside: auto;
-            }
-
-            tr {
-                page-break-inside: avoid;
-                page-break-after: auto;
-            }
         }
-
-        @media (max-width: 768px) {
-            .report-container {
-                margin: 0;
-            }
-
-            .header, .content, .footer {
-                padding: 20px;
-            }
-
-            .metrics-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .chart-wrapper {
-                height: 250px;
-                max-width: 250px;
-            }
+        
+        @media (max-width: 768px) { 
+            .metrics-grid { 
+                grid-template-columns: 1fr; 
+            } 
         }
     </style>
 </head>
@@ -310,11 +224,9 @@
         <!-- Header Section -->
         <div class="header">
             <div class="logo-section">
-                <div class="logo-placeholder">
-                    [Company Logo]
-                </div>
-                <div class="report-metadata">
-                    <div>Generated: {{ generated_date }}</div>
+                <div class="logo-placeholder">SIEMENS</div>
+                <div style="font-size: 12px;">
+                    <div>{{ generated_date }}</div>
                     <div>Version: {{ FIX_VERSION }}</div>
                 </div>
             </div>
@@ -329,19 +241,19 @@
             <div class="links-section">
                 <strong>Quick Links:</strong>
                 {% if jira_ticket_link %}
-                <a href="{{ jira_ticket_link }}" target="_blank">📋 JIRA Ticket</a>
+                <a href="{{ jira_ticket_link }}" target="_blank">JIRA Ticket</a>
                 {% endif %}
                 {% if mito_latest_version_link %}
-                <a href="{{ mito_latest_version_link }}" target="_blank">🔗 Latest Version</a>
+                <a href="{{ mito_latest_version_link }}" target="_blank">Latest Version</a>
                 {% endif %}
             </div>
             {% endif %}
 
             <!-- Executive Summary -->
             {% if test_plan_analysis %}
-            <div class="executive-summary">
-                <h2 style="color: #7000ba; margin-bottom: 12px; font-size: 18px;">Executive Summary</h2>
-                <p style="margin-bottom: 15px;">Test execution overview for Test Plan: <strong>{{ test_plan_analysis.test_plan_key }}</strong></p>
+            <div class="section">
+                <h2 class="section-title">Executive Summary</h2>
+                <p style="margin-bottom: 8px; font-size: 13px;">Test execution overview for Test Plan: <strong>{{ test_plan_analysis.test_plan_key }}</strong></p>
                 
                 <div class="metrics-grid">
                     <div class="metric-card">
@@ -359,16 +271,6 @@
                         <div class="metric-value">{{ test_plan_analysis.aggregated_results.failed_tests }}</div>
                         {% set fail_rate = (test_plan_analysis.aggregated_results.failed_tests / test_plan_analysis.aggregated_results.total_tests * 100) | round(1) if test_plan_analysis.aggregated_results.total_tests > 0 else 0 %}
                         <div class="metric-label">{{ fail_rate }}%</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Test Status Distribution Chart -->
-            <div class="section">
-                <h2 class="section-title">Test Status Distribution</h2>
-                <div class="chart-container">
-                    <div class="chart-wrapper">
-                        <canvas id="statusChart"></canvas>
                     </div>
                 </div>
             </div>
@@ -407,8 +309,8 @@
                     <thead>
                         <tr>
                             <th>Sprint</th>
-                            <th>Test Execution Key</th>
-                            <th>Total Tests</th>
+                            <th>Test Execution</th>
+                            <th>Total</th>
                             <th>Passed</th>
                             <th>Failed</th>
                             <th>Pass Rate</th>
@@ -428,16 +330,6 @@
                             </td>
                         </tr>
                         {% endfor %}
-                        <tr class="total-row">
-                            <td colspan="2">TOTAL</td>
-                            <td>{{ test_plan_analysis.aggregated_results.total_tests }}</td>
-                            <td>{{ test_plan_analysis.aggregated_results.passed_tests }}</td>
-                            <td>{{ test_plan_analysis.aggregated_results.failed_tests }}</td>
-                            <td>
-                                {% set total_pass_rate = (test_plan_analysis.aggregated_results.passed_tests / test_plan_analysis.aggregated_results.total_tests * 100) | round(1) if test_plan_analysis.aggregated_results.total_tests > 0 else 0 %}
-                                {{ total_pass_rate }}%
-                            </td>
-                        </tr>
                     </tbody>
                 </table>
             </div>
@@ -486,66 +378,7 @@
         <div class="footer">
             <p><strong>Test Execution Report</strong></p>
             <p>Generated on {{ generated_timestamp }}</p>
-            <p>&copy; 2025 - All Rights Reserved</p>
         </div>
     </div>
-
-    <!-- Chart.js Script -->
-    {% if test_plan_analysis %}
-    <script>
-        const ctx = document.getElementById('statusChart').getContext('2d');
-        const passedTests = {{ test_plan_analysis.aggregated_results.passed_tests }};
-        const failedTests = {{ test_plan_analysis.aggregated_results.failed_tests }};
-        
-        new Chart(ctx, {
-            type: 'pie',
-            data: {
-                labels: ['Passed', 'Failed'],
-                datasets: [{
-                    data: [passedTests, failedTests],
-                    backgroundColor: [
-                        '#10b981',
-                        '#ef4444'
-                    ],
-                    borderColor: [
-                        '#059669',
-                        '#dc2626'
-                    ],
-                    borderWidth: 2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: true,
-                plugins: {
-                    legend: {
-                        position: 'bottom',
-                        labels: {
-                            font: {
-                                size: 13,
-                                family: "'Segoe UI', 'Arial', sans-serif"
-                            },
-                            padding: 15
-                        }
-                    },
-                    title: {
-                        display: false
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                const label = context.label || '';
-                                const value = context.parsed || 0;
-                                const total = passedTests + failedTests;
-                                const percentage = ((value / total) * 100).toFixed(1);
-                                return label + ': ' + value + ' (' + percentage + '%)';
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    </script>
-    {% endif %}
 </body>
 </html>
