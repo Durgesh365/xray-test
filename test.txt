@@ -1,0 +1,251 @@
+1. Primary Functional Flows
+Based on the provided information, the application can be broken down into three core user workflows.
+
+Flow 1: Document Upload & Processing Pipeline
+This is the backbone system process, mostly automated after user initiation.
+
+User Initiation:
+
+User clicks "Upload File" on the dashboard.
+
+User selects a PDF (≤150 pages) and confirms the upload.
+
+A popup shows upload progress and closes upon completion.
+
+System Processing (Automated Stages):
+
+Stage 1 - Upload:
+
+System stores the original PDF in S3: uploaded docs folder/{docID}/original.pdf
+
+Dashboard updates: New row appears with Status: Uploading -> Processing, Stage at: Upload (marked complete).
+
+Stage 2 - Preprocessing:
+
+System converts the PDF into individual images (one per page).
+
+Noise reduction is applied to each image.
+
+Images are stored in S3: uploaded docs folder/{docID}/PDF images folder/page_{X}.png
+
+Dashboard updates: Stage at: Preprocessing (marked complete).
+
+Stage 3 - Text Extraction:
+
+Each image is sent to AWS Textract for OCR.
+
+Text is extracted line-by-line to maintain logical rows.
+
+Raw OCR data is stored in the application database.
+
+Dashboard updates: Stage at: Text Extraction (marked complete).
+
+Stage 4 - Labelling:
+
+The extracted text (words/lines) is sent to a Machine Learning model.
+
+The model assigns labels based on pre-defined mappings (e.g., KKS, Signal Name).
+
+Labeled data is stored in the DB.
+
+Dashboard Final Update: Status: Ready To Export, Stage at: Labelling (marked complete).
+
+Flow 2: Document Selection & Detail View
+This flow begins once a document is Ready to Export.
+
+User clicks the "Select" icon (now enabled) in the Actions column of the dashboard.
+
+System navigates to the Detail View.
+
+Page Selection:
+
+User views all pages as thumbnails with radio buttons.
+
+User can select/deselect specific pages.
+
+User can click a thumbnail to view a larger, zoomable version on the side.
+
+Selected pages are persisted in the DB (selections remain after refresh).
+
+User clicks "Continue" to proceed with the selected pages.
+
+Flow 3: Data Labelling & Export
+This is the final user-driven flow for data consumption.
+
+System navigates to the Labelling Page.
+
+The labeled data for the selected pages is displayed in a table with 8 columns (KKS, Description, Signal Name, etc.).
+
+User Interactions:
+
+Search/Filter: User can filter data using the search inputs above each column.
+
+Inline Editing: User can click on any cell to edit its content.
+
+Drag & Drop: User can drag data from one cell and drop it into another.
+
+Final Action: User clicks "Export," which generates and downloads an Excel sheet containing the current view of the table (with all applied filters and edits).
+
+2. Key User Interactions & System Processes
+User Interaction	System Process & Backend Impact
+Upload File	Frontend validation (file type, size). Multipart upload to S3. DB record creation with Status, uploaded_on.
+View Dashboard	API call to fetch document list. Auto-refresh (30s) triggers API call to update Status and Stage.
+Click "Retry"	System identifies the failed stage and re-triggers only that specific stage process.
+Click "Select"	API call to fetch persisted page selection data and image URLs from S3 for the Detail View.
+Select/Deselect Pages	API calls to persist the selection state for each page in the DB.
+Zoom Image	Fetches the high-resolution image from S3 for display.
+Search/Filter in Labelling Table	API call to the backend to filter records based on the query; frontend may handle if all data is loaded.
+Edit a Cell	API call to update the specific value in the database.
+Drag & Drop a Cell	API call(s) to update the source and target cells in the database.
+Click "Export"	Backend generates an Excel file from the current dataset (with filters/applied edits) and provides a download link.
+3. Initial Scope of Testing
+Major Features for Testing
+Dashboard & File Management
+
+File Upload functionality (success, failure, validation - file type, size, page limit).
+
+Dashboard Table rendering (columns, data, sorting if any).
+
+Status and Stage indicator accuracy.
+
+Auto-refresh functionality (30-second interval).
+
+Search functionality on the dashboard.
+
+Delete functionality.
+
+Document Processing Pipeline
+
+End-to-End success flow for a valid PDF.
+
+Accuracy and performance of PDF-to-image conversion.
+
+Accuracy of AWS Textract integration (line-by-line extraction).
+
+Accuracy of the ML Labelling model.
+
+Functional testing of the "Retry" mechanism for each failed stage.
+
+Detail View & Page Selection
+
+Rendering of thumbnails and pagination.
+
+Page selection persistence (across refreshes).
+
+Zoom functionality for images.
+
+"Select All" and "Continue" button functionality.
+
+Labelling Interface & Data Export
+
+Rendering of the data table with correct labels.
+
+Column-based search/filter functionality.
+
+In-line cell editing and persistence.
+
+Drag-and-drop functionality and data integrity post-operation.
+
+Excel export functionality (completeness, accuracy, formatting).
+
+Potential Risk Areas & Focus Points
+High Risk - Data Integrity:
+
+OCR Accuracy: The entire application's value depends on accurate text extraction. Testing must verify that line-by-line extraction from complex engineering drawings is correct.
+
+ML Labelling Accuracy: Incorrect labels will lead to garbage data. Requires a set of "golden" documents with known-good outputs for validation.
+
+
+
+
+
+Testing Flows
+1. End-to-End Flows
+E2E Flow 1: New Document Processing
+Upload PDF → Monitor auto-processing → Select pages → Review labelled data → Export to Excel
+
+E2E Flow 2: Document Correction Workflow
+Find failed document → Retry processing → Select pages → Correct labels → Re-export data
+
+E2E Flow 3: Multi-Document Management
+Upload multiple PDFs → Monitor all statuses → Process each → Export all results
+
+2. Page-Wise Flows
+Dashboard Page Flows
+New Upload Flow: Click Upload → Select PDF → Watch progress → See in table
+
+Status Monitoring Flow: View status columns → Watch auto-refresh → Identify ready documents
+
+Document Management Flow: Search documents → Retry failed → Delete unwanted
+
+Detail View Page Flows
+Page Selection Flow: View thumbnails → Zoom images → Select pages → Continue
+
+Selection Persistence Flow: Select pages → Refresh browser → Verify selections kept
+
+Labelling Page Flows
+Data Review Flow: View labelled table → Search columns → Edit cells → Export data
+
+Data Correction Flow: Find errors → Edit values → Drag-drop corrections → Verify changes
+
+Cross-Page Navigation Flows
+Forward Flow: Dashboard → Detail View → Labelling Page
+
+Backward Flow: Labelling Page ← Detail View ← Dashboard (using browser back)
+
+Direct Access Flow: Bookmark labelling page → Load directly with data
+
+3. Error & Edge Case Flows
+Upload Error Flow: Try invalid file → See error → Upload valid file
+
+Processing Failure Flow: Upload corrupt PDF → See failure → Retry → Success
+
+Recovery Flow: Close browser mid-process → Reopen → Continue where left
+
+
+
+
+
+99999
+dOCReader - Functional Analysis & Test Scope Document
+Objective: Analyze the dOCReader project and document primary functional flows and initial testing scope.
+
+1. Core Functional Workflows
+Flow 1: Document Processing Pipeline
+
+User uploads PDF → System processes through 4 stages (Upload → Preprocessing → Text Extraction → Labelling) → Document becomes "Ready to Export"
+
+Flow 2: Data Extraction & Export
+
+User selects processed document → Chooses specific pages → Reviews ML-labelled data in table → Exports to Excel
+
+Flow 3: Error Recovery & Management
+
+System detects processing failure → User identifies failed document → Retries specific failed stage → Resumes normal processing
+
+2. Key User Interactions & System Processes
+User Interaction	System Process
+Upload PDF	Frontend validation → Store in S3 → Create DB record
+Monitor Status	Auto-refresh dashboard → Update status/stage indicators
+Select Pages	Persist selection in DB → Generate detail view
+Search/Filter Data	Query database → Return filtered results
+Edit Labelled Data	Update cell values in database
+Export to Excel	Generate Excel file from current dataset
+3. Initial Testing Scope
+Major Features for Testing
+File Management: Upload validation, status monitoring, auto-refresh
+
+Processing Pipeline: 4-stage progression, retry mechanism, S3 file handling
+
+Data Interface: Page selection persistence, table operations (search, edit, drag-drop)
+
+Export Functionality: Excel generation with correct data and formatting
+
+High-Risk Areas
+Data Integrity: AWS Textract extraction accuracy, ML labelling correctness
+
+System Resilience: Error handling in processing pipeline, retry logic
+
+User Experience: Auto-refresh performance, large file processing time
+
+Data Persistence: Page selection saving, edit preservation across sessions
